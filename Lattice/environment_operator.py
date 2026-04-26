@@ -50,7 +50,7 @@ class Env(object):
         if done:
             print(fid)
         if fid > self.threshold:
-            print self.Ut
+            print(self.Ut)
         self.t +=1
 
         self.state = np.fliplr(self.Ut).diagonal().real

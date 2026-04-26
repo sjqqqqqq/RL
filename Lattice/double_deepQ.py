@@ -84,7 +84,7 @@ def calc_loss_over_episode(batch_size):
     next_q_value = next_q_values.max(1)[0]
     expected_q_value = reward + gamma * next_q_value * (1 - done)
     loss = (q_value - Variable(expected_q_value)).pow(2).mean()
-    loss_conv.append(loss)
+    loss_conv.append(loss.item())
     return loss
 
 replay_buffer = []

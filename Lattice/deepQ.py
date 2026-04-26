@@ -74,7 +74,7 @@ def calc_loss_over_episode(batch_size):
     next_q_value = next_q_values.max(1)[0]
     expected_q_value = reward + gamma * next_q_value * (1 - done)
     loss = (q_value - Variable(expected_q_value)).pow(2).mean()
-    loss_conv.append(loss)
+    loss_conv.append(loss.item())
       
     return loss
 
@@ -120,6 +120,8 @@ for episode in range(max_episodes):
     
 #torch.save(model, "params")
 
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 N = len(fid_t)-1
 dt = env.max_time/env.n_steps
@@ -134,10 +136,16 @@ phi_tt = []
 for i in range(N):
     phi_tt.append(phi_t[i])
     phi_tt.append(phi_t[i])
+plt.figure()
 plt.plot(t, fid_t, label='Fidelity')
-plt.plot(tt, phi_tt, label='$\phi$')
-plt.xlabel('$t\ (\omega_r^{-1})$')
+plt.plot(tt, phi_tt, label=r'$\phi$')
+plt.xlabel(r'$t\ (\omega_r^{-1})$')
 plt.legend(loc="upper left")
-plt.show()
+plt.savefig("trajectory.png", dpi=120, bbox_inches="tight")
+plt.figure()
 plt.plot(loss_conv)
-plt.show()
+plt.xlabel("update step")
+plt.ylabel("loss")
+plt.yscale("log")
+plt.savefig("loss.png", dpi=120, bbox_inches="tight")
+print("Saved trajectory.png and loss.png")
