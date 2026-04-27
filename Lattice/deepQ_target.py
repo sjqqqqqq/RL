@@ -33,7 +33,7 @@ class DQN(nn.Module):
 
     def forward(self, x):
         h = torch.relu(self.l1(x))
-        return torch.relu(self.l2(h))
+        return self.l2(h)  # linear output: Q-values can be any real number
 
     def act(self, state, eps):
         if random.random() > eps:

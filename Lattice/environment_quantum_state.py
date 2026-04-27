@@ -1,18 +1,19 @@
 
+import os
 import numpy as np
-from scipy.linalg import expm, eig
+from scipy.linalg import expm, eigh
+from scipy.io import loadmat
 
-n_states = 7
-V0 = 5.
-p = np.linspace(-6, 6, n_states)
-H0 = np.diag(p**2/2.)
-H1 = np.zeros([n_states,n_states], dtype=complex) #sin
-H1[0:n_states-1, 1:n_states] += V0/4*1j*np.identity(n_states-1);
-H1[1:n_states, 0:n_states-1] -= V0/4*1j*np.identity(n_states-1);
-H2 = np.zeros([n_states,n_states], dtype=complex) #cos
-H2[0:n_states-1, 1:n_states] += V0/4*np.identity(n_states-1);
-H2[1:n_states, 0:n_states-1] += V0/4*np.identity(n_states-1);
-w, v = eig(H0 - H2)
+# Load Hamiltonian pieces from MATLAB files. H0 is the static Bloch
+# Hamiltonian (kinetic + phi=0 lattice), so H(phi=0) = H0 and the
+# eigenvectors of H0 are Bloch states.
+_here = os.path.dirname(os.path.abspath(__file__))
+H0 = loadmat(os.path.join(_here, "H0.mat"))["H0"].astype(complex)
+H1 = loadmat(os.path.join(_here, "H1.mat"))["H1"].astype(complex)
+H2 = loadmat(os.path.join(_here, "H2.mat"))["H2"].astype(complex)
+n_states = H0.shape[0]
+
+w, v = eigh(H0)  # Bloch eigenstates, eigenvalues ascending
 
 class Env(object):
     def __init__(self):
@@ -39,7 +40,7 @@ class Env(object):
     def step(self, action, fid0):
         
         self.phi = self.actions[action]
-        H =  H0 + np.sin(self.phi)*H1 - np.cos(self.phi)*H2;
+        H = H0 + np.sin(self.phi)*H1 + (1 - np.cos(self.phi))*H2
         dt = self.max_time/self.n_steps
         U = expm(-1j * H * dt)  # Evolution operator
 

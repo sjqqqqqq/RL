@@ -35,7 +35,7 @@ class Env(object):
 
     def step(self, action):
         phi = self.actions[action];
-        H =  H0 + np.sin(phi)*H1 - np.cos(phi)*H2;
+        H = H0 + np.sin(phi)*H1 + (1 - np.cos(phi))*H2
         dt = self.max_time/self.n_steps
         dU = expm(-1j * H * dt)  # Evolution operator
 
