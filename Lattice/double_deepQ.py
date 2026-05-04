@@ -14,7 +14,7 @@ gamma = 0.999
 epsilon = 0.5
 tau = 0.995
 batch_size = 500
-max_episodes = 200
+max_episodes = 3000
 
 class DQN(nn.Module):
     def __init__(self):
@@ -33,7 +33,6 @@ class DQN(nn.Module):
             self.l1,
             nn.ReLU(),
             self.l2,
-            nn.ReLU()
         )
         return model(x)
   
@@ -89,6 +88,10 @@ def calc_loss_over_episode(batch_size):
 
 replay_buffer = []
 loss_conv = []
+best_fid_overall = -1.0
+best_phi_t = []
+best_fid_t = []
+best_fid_per_ep = []
 
 for episode in range(max_episodes):
     env.reset()
@@ -115,15 +118,31 @@ for episode in range(max_episodes):
             #    del replay_buffer[0]
         for target_param, param in zip(target.parameters(), model.parameters()):
             target_param.data.copy_(target_param.data * tau + param.data * (1.0 - tau))
+    best_fid_per_ep.append(fid)
+    if fid > best_fid_overall:
+        best_fid_overall = fid
+        best_phi_t = list(phi_t)
+        best_fid_t = list(fid_t)
+    if episode % 10 == 0:
+        recent = best_fid_per_ep[-10:]
+        print(f"ep {episode:4d}  eps={epsilon:.3f}  last_fid={fid:.3f}  "
+              f"best={best_fid_overall:.3f}  mean_last_10={np.mean(recent):.3f}",
+              flush=True)
     if fid > env.threshold:
+        print(f"Solved at episode {episode}, fidelity {fid:.3f}", flush=True)
         break
-    
-    epsilon = max(epsilon * 0.99, 0.001)
+
+    epsilon = max(epsilon * 0.995, 0.01)
     #if len(replay_buffer) >= batch_size:
     #    scheduler.step()
 
 #torch.save(model, "params")
+print(f"\nFinished. Best fidelity: {best_fid_overall:.3f}", flush=True)
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+fid_t = best_fid_t
+phi_t = best_phi_t
 N = len(fid_t)-1
 dt = env.max_time/env.n_steps
 t = np.arange(0, (dt*N+dt)/2., dt/2.) #in units of recoil frequency inverse
@@ -140,7 +159,24 @@ plt.plot(t, fid_t, label='Fidelity')
 plt.plot(tt, phi_tt, label='$\phi$')
 plt.xlabel('$t\ (\omega_r^{-1})$')
 plt.legend(loc="upper left")
-plt.show()
+plt.title(f"Best episode (F={best_fid_overall:.3f})")
+plt.savefig("trajectory_mirror.png", dpi=120, bbox_inches="tight")
+plt.figure()
+plt.plot(best_fid_per_ep, alpha=0.3, label="per-episode terminal fidelity")
+window = 10
+if len(best_fid_per_ep) >= window:
+    smooth = np.convolve(best_fid_per_ep, np.ones(window)/window, mode="valid")
+    plt.plot(np.arange(window-1, len(best_fid_per_ep)), smooth,
+             label=f"{window}-episode rolling mean")
+plt.xlabel("episode")
+plt.ylabel("terminal fidelity")
+plt.legend()
+plt.savefig("learning_curve_mirror.png", dpi=120, bbox_inches="tight")
+plt.figure()
 plt.plot(loss_conv)
-plt.show()
+plt.xlabel("update step")
+plt.ylabel("loss")
+plt.yscale("log")
+plt.savefig("loss_mirror.png", dpi=120, bbox_inches="tight")
+print("Saved trajectory_mirror.png, learning_curve_mirror.png, loss_mirror.png", flush=True)
 
