@@ -6,20 +6,24 @@ from torch.optim.lr_scheduler import StepLR
 from torch.autograd import Variable
 from environment_operator import Env
 import random
+from collections import deque
 
 env = Env()
 #Hyperparameters
-learning_rate = 0.0001
-gamma = 0.999
+learning_rate = 0.001
+gamma = 0.99
 epsilon = 0.5
-tau = 0.995
-batch_size = 500
-max_episodes = 3000
+epsilon_decay = 0.9995
+epsilon_min = 0.01
+tau = 0.99
+batch_size = 32
+max_episodes = 10000
+replay_capacity = 10000
 
 class DQN(nn.Module):
     def __init__(self):
         super(DQN, self).__init__()
-        self.state_space = env.n_states
+        self.state_space = env.n_obs
         self.action_space = env.n_actions
         self.hidden_size = 48
   
@@ -86,7 +90,7 @@ def calc_loss_over_episode(batch_size):
     loss_conv.append(loss.item())
     return loss
 
-replay_buffer = []
+replay_buffer = deque(maxlen=replay_capacity)
 loss_conv = []
 best_fid_overall = -1.0
 best_phi_t = []
@@ -132,7 +136,7 @@ for episode in range(max_episodes):
         print(f"Solved at episode {episode}, fidelity {fid:.3f}", flush=True)
         break
 
-    epsilon = max(epsilon * 0.995, 0.01)
+    epsilon = max(epsilon * epsilon_decay, epsilon_min)
     #if len(replay_buffer) >= batch_size:
     #    scheduler.step()
 
@@ -142,21 +146,26 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 fid_t = best_fid_t
-phi_t = best_phi_t
-N = len(fid_t)-1
+phi_t = best_phi_t  # amplitude chosen in each interval
+N = len(phi_t)      # number of decision intervals
 dt = env.max_time/env.n_steps
-t = np.arange(0, (dt*N+dt)/2., dt/2.) #in units of recoil frequency inverse
-tt = [0]
-for i in range(1,N):
-    tt.append(i*dt/2.)
-    tt.append(i*dt/2.)
-tt.append(N*dt/2.)
-phi_tt = []
+# fidelity sampled at interval boundaries 0, dt, ..., N*dt
+t_fid = np.linspace(0, N*dt, N+1)
+# step plot for amplitude
+tt = []
+amp_tt = []
 for i in range(N):
-    phi_tt.append(phi_t[i])
-    phi_tt.append(phi_t[i])
-plt.plot(t, fid_t, label='Fidelity')
-plt.plot(tt, phi_tt, label='$\phi$')
+    tt += [i*dt, (i+1)*dt]
+    amp_tt += [phi_t[i], phi_t[i]]
+# actual protocol phi(t) = Amp(t) * sin(12 t) sampled finely
+t_fine = np.linspace(0, N*dt, 2000)
+phi_fine = np.empty_like(t_fine)
+for j, tj in enumerate(t_fine):
+    k = min(int(tj/dt), N-1)
+    phi_fine[j] = phi_t[k] * np.sin(12.0 * tj)
+plt.plot(t_fid, fid_t, 'o-', label='Fidelity')
+plt.plot(tt, amp_tt, label='Amp')
+plt.plot(t_fine, phi_fine, lw=0.8, alpha=0.8, label=r'$\phi(t)=\mathrm{Amp}\sin(12t)$')
 plt.xlabel('$t\ (\omega_r^{-1})$')
 plt.legend(loc="upper left")
 plt.title(f"Best episode (F={best_fid_overall:.3f})")
