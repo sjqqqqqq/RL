@@ -7,3 +7,4 @@ params
 *.pdf
 *.md
 *.mat
+.claude/
