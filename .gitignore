@@ -8,3 +8,19 @@ params
 *.md
 *.mat
 .claude/
+
+# Julia
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/Manifest.toml
+**/Manifest.toml
+deps/deps.jl
+deps/build.log
+deps/downloads/
+deps/usr/
+deps/src/
+docs/build/
+docs/site/
+.julia/
+LocalPreferences.toml
