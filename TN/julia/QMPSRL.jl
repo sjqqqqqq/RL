@@ -123,11 +123,12 @@ mutable struct Env
     n_steps_max :: Int
 end
 
-# Random product state with arbitrary single-site orientation (paper's "25%
-# random polarized product states" mode — reflection-symmetric Haar states
-# are a follow-up).
-function _random_initial_state(rng::AbstractRNG)
-    ψ = MPS(SITES, ["Up" for _ in 1:N])  # start product |0...0⟩
+# Paper (Metz & Bukov 2023, p. 782): 25% random polarized product states,
+# 75% reflection-symmetric states drawn from the full 2^N-dim Hilbert space
+# by sampling wave-function amplitudes from a (complex) normal distribution
+# and projecting onto the +1 eigenspace of spatial reflection.
+function _polarized_product_state(rng::AbstractRNG)
+    ψ = MPS(SITES, ["Up" for _ in 1:N])
     for i in 1:N
         θ = 2π * rand(rng)
         φ = π  * rand(rng)
@@ -137,6 +138,24 @@ function _random_initial_state(rng::AbstractRNG)
     end
     normalize!(ψ)
     return ψ
+end
+
+function _reflection_symmetric_haar_state(rng::AbstractRNG)
+    amps = randn(rng, ComplexF64, ntuple(_ -> 2, N))
+    # Reflection R: |s_1 ... s_N⟩ ↔ |s_N ... s_1⟩. Project onto +1 eigenspace.
+    amps .+= permutedims(amps, ntuple(i -> N - i + 1, N))
+    T = ITensor(amps, SITES...)
+    ψ = MPS(T, SITES; cutoff=1e-12)
+    normalize!(ψ)
+    return ψ
+end
+
+function _random_initial_state(rng::AbstractRNG)
+    if rand(rng) < 0.25
+        return _polarized_product_state(rng)
+    else
+        return _reflection_symmetric_haar_state(rng)
+    end
 end
 
 function new_env(seed::Int = 0;

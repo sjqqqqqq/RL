@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed",           type=int,   default=0)
     p.add_argument("--log-every",      type=int,   default=10)
     p.add_argument("--out-prefix",     type=str,   default="study_a")
+    p.add_argument("--greedy-eval",    type=int,   default=0,
+                   help="After training, run this many ε=0 episodes from fresh "
+                        "initial states and report success rate / fidelity stats.")
+    p.add_argument("--eval-seed",      type=int,   default=10_000_000,
+                   help="Base seed for the greedy-eval init-state sampler "
+                        "(kept disjoint from training seeds for reproducibility).")
     return p.parse_args()
 
 
@@ -115,6 +121,9 @@ def train(args: argparse.Namespace) -> None:
 
     _save_plots(fid_per_ep, best_fid_t, losses, best_actions, args)
 
+    if args.greedy_eval > 0:
+        _greedy_eval(model, args)
+
 
 def _gradient_step(model: QMPSDQN,
                    target: QMPSDQN,
@@ -141,6 +150,54 @@ def _gradient_step(model: QMPSDQN,
     loss.backward()
     optim_.step()
     losses.append(loss.item())
+
+
+def _greedy_eval(model: QMPSDQN, args: argparse.Namespace) -> None:
+    rng = random.Random(args.eval_seed)
+    terminal_fids: list[float] = []
+    steps_used: list[int] = []
+    t0 = time.time()
+    for k in range(args.greedy_eval):
+        env = B.JuliaEnv(seed=rng.randint(0, 2**31 - 1),
+                         f_threshold=args.f_threshold,
+                         n_steps_max=args.n_steps_max)
+        s = env.state_id
+        done = False
+        fid = env.fidelity()
+        n_steps = 0
+        while not done:
+            a = model.act(s, eps=0.0)
+            s, _, done, fid = env.step(a)
+            n_steps += 1
+        terminal_fids.append(fid)
+        steps_used.append(n_steps)
+
+    arr = np.asarray(terminal_fids)
+    n_succ = int((arr >= args.f_threshold).sum())
+    print(f"\n[greedy eval] {args.greedy_eval} episodes, "
+          f"{time.time() - t0:.1f}s")
+    print(f"  success rate (F >= {args.f_threshold}): "
+          f"{n_succ}/{args.greedy_eval} = {n_succ / args.greedy_eval:.3f}")
+    print(f"  fidelity: mean={arr.mean():.4f}  median={np.median(arr):.4f}  "
+          f"min={arr.min():.4f}  max={arr.max():.4f}")
+    print(f"  steps used: mean={np.mean(steps_used):.1f}  "
+          f"median={np.median(steps_used):.1f}  max={max(steps_used)}")
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    plt.figure()
+    plt.hist(arr, bins=40, range=(0.0, 1.0))
+    plt.axvline(args.f_threshold, ls="--", color="grey",
+                label=f"F* = {args.f_threshold}")
+    plt.xlabel("terminal fidelity (greedy, fresh init states)")
+    plt.ylabel("count")
+    plt.title(f"Greedy eval: success {n_succ}/{args.greedy_eval} "
+              f"({n_succ / args.greedy_eval:.1%})")
+    plt.legend()
+    out = f"{_OUT_DIR}/{args.out_prefix}_greedy_eval.png"
+    plt.savefig(out, dpi=120, bbox_inches="tight")
+    print(f"  saved histogram to {out}")
 
 
 def _save_plots(fid_per_ep: list[float],
