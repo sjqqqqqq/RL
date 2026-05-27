@@ -1,0 +1,3 @@
+[submodule "QMPS"]
+	path = QMPS
+	url = https://github.com/frmetz/QMPS.git

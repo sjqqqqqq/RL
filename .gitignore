@@ -6,6 +6,7 @@ __pycache__/
 params
 *.pdf
 *.md
+!CLAUDE.md
 *.mat
 .claude/
 
