@@ -11,7 +11,7 @@ import random
 from collections import defaultdict, deque
 from typing import Deque, NamedTuple
 
-import bridge_paper as B
+import bridge as B
 
 
 class Transition(NamedTuple):

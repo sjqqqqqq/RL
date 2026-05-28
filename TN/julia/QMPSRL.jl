@@ -6,70 +6,148 @@ using Random
 using Zygote
 
 # ===================================================================
-# Constants / problem definition
+# Constants / problem definition — Paper Study A (Metz & Bukov 2022/2023)
 # ===================================================================
 
-const N = 4                     # number of spins
-const SITES = siteinds("S=1/2", N)
-const CHI_Q = 4                 # QMPS bond dimension
-const D_F   = 8                 # feature dimension (dangling leg)
-const CENTRAL_SITE = N ÷ 2      # site that carries the feature leg
+const N             = 4                # number of spins
+const SITES         = siteinds("S=1/2", N)
+const D_QSTATE      = 4                # quantum-state MPS bond dimension (paper D=4)
+const D_F           = 32               # QMPS feature dimension (paper n_feat=32)
 
-# Action set (paper Eq. 2): 6 generators × 2 signs × 2 step sizes = 24 actions
-const GENERATORS = ["X", "Y", "Z", "XX", "YY", "ZZ"]
-const STEP_SIZES = [π/8, π/16]   # δt₊, δt₋
-const SIGNS      = [+1.0, -1.0]
-const N_ACTIONS  = length(GENERATORS) * length(SIGNS) * length(STEP_SIZES)
+# QMPS bond structure for N=4, d_phys=2, d_bond_cap=4 (uniform=False, paper):
+# bond after site i: min(2^i, 2^(N-i), d_bond_cap) → [2, 4, 4, 2]
+const CHI_BONDS     = (2, 4, 4, 2)
 
-# Index layout: a-1 = ((gen_idx-1)*nSign + (sign_idx-1))*nStep + (step_idx-1)
-function decode_action(a::Int)
-    a0 = a - 1
-    nStep = length(STEP_SIZES)
-    nSign = length(SIGNS)
-    step_idx = a0 % nStep + 1
-    sign_idx = (a0 ÷ nStep) % nSign + 1
-    gen_idx  = a0 ÷ (nStep * nSign) + 1
-    return GENERATORS[gen_idx], SIGNS[sign_idx], STEP_SIZES[step_idx]
+# Per-episode initial state: TFIM ground state at (J=1, gx∈U[gx_lo, gx_hi], gz=0).
+const J_INIT        = 1.0
+const GX_INIT_LO    = 1.0
+const GX_INIT_HI    = 1.1
+const GZ_INIT       = 0.0
+
+# Target state: ground state of (J=0, gx=0, gz=1), i.e. H = -ΣZ_i → |↑↑↑↑⟩.
+const J_TGT, GX_TGT, GZ_TGT = (0.0, 0.0, 1.0)
+
+# Action set (paper order; the parity-based step-size selector requires this):
+#   index 0  gx,  +h_max, 1-site,  even → δt+
+#   index 1  ngx, -h_max, 1-site,  odd  → δt-
+#   index 2  gy,  +h_max, 1-site,  even → δt+
+#   index 3  ngy, -h_max, 1-site,  odd  → δt-
+#   index 4  gz,  +h_max, 1-site,  even → δt+
+#   index 5  ngz, -h_max, 1-site,  odd  → δt-
+#   index 6  Jx,  +h_max, 2-site,  even → δt+
+#   index 7  nJx, -h_max, 2-site,  odd  → δt-
+#   index 8  Jy,  +h_max, 2-site,  even → δt+
+#   index 9  nJy, -h_max, 2-site,  odd  → δt-
+#   index 10 Jz,  +h_max, 2-site,  even → δt+
+#   index 11 nJz, -h_max, 2-site,  odd  → δt-
+#
+# Paper time evolution per action: exp(-i·duration·op) with op = -h_max·G_total,
+# so the effective gate is exp(+i·duration·h_max·G_total). With h_max ∈ {±1},
+# the sign of the rotation comes from h_max and the magnitude from duration.
+const H_MAX         = 1.0
+const DT_PLUS       = π / 12           # 0.5π/6,    even index
+const DT_MINUS      = π / 17           # 0.5π/8.5,  odd  index
+
+const ACTIONS = (
+    ("X",  +H_MAX, :one),  ("X",  -H_MAX, :one),
+    ("Y",  +H_MAX, :one),  ("Y",  -H_MAX, :one),
+    ("Z",  +H_MAX, :one),  ("Z",  -H_MAX, :one),
+    ("XX", +H_MAX, :two),  ("XX", -H_MAX, :two),
+    ("YY", +H_MAX, :two),  ("YY", -H_MAX, :two),
+    ("ZZ", +H_MAX, :two),  ("ZZ", -H_MAX, :two),
+)
+const N_ACTIONS     = length(ACTIONS)
+
+# Termination threshold (paper: reward > log(1 - 0.005), reward = log(F)/N):
+#   F > exp(N · log(1 - 0.005)) = 0.995^N = 0.9801 for N=4.
+const F_THRESHOLD   = 0.995 ^ N
+const N_STEPS_MAX   = 50
+
+# ===================================================================
+# State registry — Python keeps integer handles, Julia owns the MPS.
+# ===================================================================
+
+struct RegEntry
+    ψ     :: MPS
+    dense :: Array{ComplexF64, N}      # (s1,…,sN) at canonical site order
 end
 
-# ===================================================================
-# State registry — Python keeps integer handles, Julia owns the MPS
-# ===================================================================
-
-const _registry = Dict{Int, MPS}()
+const _registry = Dict{Int, RegEntry}()
 const _next_id  = Ref{Int}(0)
 
 function _register!(ψ::MPS)
     _next_id[] += 1
     id = _next_id[]
-    _registry[id] = ψ
+    _registry[id] = RegEntry(ψ, _state_to_dense(ψ))
     return id
 end
 
-get_state(id::Int) = _registry[id]
-forget_state!(id::Int) = (delete!(_registry, id); nothing)
-registry_size() = length(_registry)
+get_state(id::Int)       = _registry[id].ψ
+get_dense(id::Int)       = _registry[id].dense
+forget_state!(id::Int)   = (delete!(_registry, id); nothing)
+registry_size()          = length(_registry)
+clear_registry!()        = (empty!(_registry); _next_id[] = 0; nothing)
 
-# ===================================================================
-# Target state: DMRG ground state of H = -Σ X_i
-# ===================================================================
-
-function _build_target()
-    os = OpSum()
-    for i in 1:N
-        os += -1.0, "X", i
+# Convert an MPS to a dense statevector of shape (2,2,…,2). Cheap at N=4.
+function _state_to_dense(ψ::MPS)
+    T = ψ[1]
+    for i in 2:N
+        T = T * ψ[i]
     end
-    H = MPO(os, SITES)
-    ψ0 = random_mps(SITES; linkdims=2)
-    E, ψ★ = dmrg(H, ψ0;
-                 nsweeps = 10,
-                 maxdim  = [10, 20, 40, 40, 40],
-                 cutoff  = 1e-12,
-                 outputlevel = 0)
-    return ψ★, E
+    return Array(T, SITES...)          # shape (2,2,2,2) for N=4
 end
 
-const TARGET_STATE, TARGET_ENERGY = _build_target()
+# ===================================================================
+# TLFI Hamiltonian + DMRG ground-state helper
+# ===================================================================
+# H = -J·Σ Z_i Z_{i+1} - gx·Σ X_i - gz·Σ Z_i   (paper sign convention)
+
+function tlfi_mpo(J::Real, gx::Real, gz::Real)
+    os = OpSum()
+    for i in 1:N
+        if gx != 0
+            os += -gx, "X", i
+        end
+        if gz != 0
+            os += -gz, "Z", i
+        end
+    end
+    for i in 1:N-1
+        if J != 0
+            os += -J, "Z", i, "Z", i+1
+        end
+    end
+    return MPO(os, SITES)
+end
+
+function dmrg_ground(J::Real, gx::Real, gz::Real; rng::AbstractRNG = Random.default_rng())
+    H  = tlfi_mpo(J, gx, gz)
+    ψ0 = random_mps(rng, SITES; linkdims = 2)
+    sweeps_maxdim = min.([10, 20, 40, 40, 40], D_QSTATE)  # cap at paper's D=4
+    E, ψ = dmrg(H, ψ0;
+                nsweeps     = 10,
+                maxdim      = sweeps_maxdim,
+                cutoff      = 1e-12,
+                outputlevel = 0)
+    return ψ, E
+end
+
+# ===================================================================
+# Target state — built once at module load.
+# ===================================================================
+
+const TARGET_STATE, TARGET_ENERGY = dmrg_ground(J_TGT, GX_TGT, GZ_TGT)
+
+# ===================================================================
+# Per-episode initial state sampler.
+# ===================================================================
+# Paper Study A: random TFIM ground state with gx ∈ U[1.0, 1.1].
+
+function _random_initial_state(rng::AbstractRNG)
+    gx = GX_INIT_LO + (GX_INIT_HI - GX_INIT_LO) * rand(rng)
+    ψ, _ = dmrg_ground(J_INIT, gx, GZ_INIT; rng = rng)
+    return ψ
+end
 
 # ===================================================================
 # Action application
@@ -78,36 +156,42 @@ const TARGET_STATE, TARGET_ENERGY = _build_target()
 #   - For Σ G_i (single site), the G_i act on disjoint sites.
 #   - For Σ G_i G_{i+1}, adjacent bonds share one site but the same Pauli on
 #     that site commutes with itself.
-# Therefore exp(iα ΣG) factorises exactly as a product of 1- or 2-site gates.
+# So exp(iα ΣG) factorises exactly as a product of 1- or 2-site gates.
 
-function _build_gates(gen::String, angle::Float64)
+decode_action(a::Int) = ACTIONS[a + 1]   # Python sends 0-indexed actions
+
+# Per-action step size: even index → δt+, odd → δt-.
+duration_for(a::Int) = (a % 2 == 0) ? DT_PLUS : DT_MINUS
+
+function _build_gates(gen::String, h_max::Float64, kind::Symbol, dt::Float64)
+    # Effective rotation angle (paper convention: op = -h_max·G, evolution
+    # exp(-i·dt·op) = exp(+i·dt·h_max·G)).
+    angle = h_max * dt
     gates = ITensor[]
-    if length(gen) == 1
+    if kind == :one
         for i in 1:N
             G  = op(gen, SITES[i])
             Id = op("Id", SITES[i])
             push!(gates, cos(angle) * Id + im * sin(angle) * G)
         end
-    else
-        g1 = string(gen[1])
+    else  # :two
+        g1 = string(gen[1])              # "XX" → "X", etc.
         for i in 1:N-1
             G1  = op(g1, SITES[i])
             G2  = op(g1, SITES[i+1])
             Id1 = op("Id", SITES[i])
             Id2 = op("Id", SITES[i+1])
-            GG  = G1 * G2
-            II  = Id1 * Id2
-            push!(gates, cos(angle) * II + im * sin(angle) * GG)
+            push!(gates, cos(angle) * (Id1 * Id2) + im * sin(angle) * (G1 * G2))
         end
     end
     return gates
 end
 
 function apply_action(ψ::MPS, action::Int)
-    gen, sgn, dt = decode_action(action)
-    angle = sgn * dt
-    gates = _build_gates(gen, angle)
-    ψ′ = apply(gates, ψ; cutoff=1e-12, maxdim=16)
+    gen, h_max, kind = decode_action(action)
+    dt    = duration_for(action)
+    gates = _build_gates(gen, h_max, kind, dt)
+    ψ′    = apply(gates, ψ; cutoff = 1e-12, maxdim = D_QSTATE)
     normalize!(ψ′)
     return ψ′
 end
@@ -123,44 +207,9 @@ mutable struct Env
     n_steps_max :: Int
 end
 
-# Paper (Metz & Bukov 2023, p. 782): 25% random polarized product states,
-# 75% reflection-symmetric states drawn from the full 2^N-dim Hilbert space
-# by sampling wave-function amplitudes from a (complex) normal distribution
-# and projecting onto the +1 eigenspace of spatial reflection.
-function _polarized_product_state(rng::AbstractRNG)
-    ψ = MPS(SITES, ["Up" for _ in 1:N])
-    for i in 1:N
-        θ = 2π * rand(rng)
-        φ = π  * rand(rng)
-        Rz = cos(θ/2) * op("Id", SITES[i]) - im * sin(θ/2) * op("Z", SITES[i])
-        Ry = cos(φ/2) * op("Id", SITES[i]) - im * sin(φ/2) * op("Y", SITES[i])
-        ψ = apply([Rz, Ry], ψ; cutoff=1e-12)
-    end
-    normalize!(ψ)
-    return ψ
-end
-
-function _reflection_symmetric_haar_state(rng::AbstractRNG)
-    amps = randn(rng, ComplexF64, ntuple(_ -> 2, N))
-    # Reflection R: |s_1 ... s_N⟩ ↔ |s_N ... s_1⟩. Project onto +1 eigenspace.
-    amps .+= permutedims(amps, ntuple(i -> N - i + 1, N))
-    T = ITensor(amps, SITES...)
-    ψ = MPS(T, SITES; cutoff=1e-12)
-    normalize!(ψ)
-    return ψ
-end
-
-function _random_initial_state(rng::AbstractRNG)
-    if rand(rng) < 0.25
-        return _polarized_product_state(rng)
-    else
-        return _reflection_symmetric_haar_state(rng)
-    end
-end
-
 function new_env(seed::Int = 0;
-                 f_threshold::Float64 = 0.85,
-                 n_steps_max::Int     = 50)
+                 f_threshold::Float64 = F_THRESHOLD,
+                 n_steps_max::Int     = N_STEPS_MAX)
     rng = MersenneTwister(seed)
     ψ   = _random_initial_state(rng)
     id  = _register!(ψ)
@@ -175,24 +224,20 @@ function reset!(env::Env, seed::Int)
     return env.state_id
 end
 
-function fidelity_id(state_id::Int)
-    ψ = get_state(state_id)
-    return abs2(inner(TARGET_STATE, ψ))
-end
-
-fidelity(env::Env) = fidelity_id(env.state_id)
-reward_id(state_id::Int) = log(max(fidelity_id(state_id), 1e-16)) / N
-reward(env::Env)   = reward_id(env.state_id)
+fidelity_id(state_id::Int) = abs2(inner(TARGET_STATE, get_state(state_id)))
+fidelity(env::Env)         = fidelity_id(env.state_id)
+reward_id(state_id::Int)   = log(max(fidelity_id(state_id), 1e-16)) / N
+reward(env::Env)           = reward_id(env.state_id)
 
 # Apply an action; returns (next_state_id, reward, done, fidelity).
 function step!(env::Env, action::Int)
-    ψ      = get_state(env.state_id)
-    ψ_next = apply_action(ψ, action)
+    ψ       = get_state(env.state_id)
+    ψ_next  = apply_action(ψ, action)
     next_id = _register!(ψ_next)
     env.state_id = next_id
-    env.t += 1
-    f = fidelity_id(next_id)
-    r = log(max(f, 1e-16)) / N
+    env.t       += 1
+    f    = fidelity_id(next_id)
+    r    = log(max(f, 1e-16)) / N
     done = (f ≥ env.f_threshold) || (env.t ≥ env.n_steps_max)
     return next_id, r, done, f
 end
@@ -200,105 +245,136 @@ end
 # ===================================================================
 # QMPS (trainable agent)
 # ===================================================================
-# The QMPS tensors live as plain Julia arrays (not ITensors): we want
-# Zygote to differentiate the contraction wrt every entry, and ITensors'
-# Zygote support doesn't cover `array(::ITensor, ::Index)` (which we'd need
-# to convert the d_f-dim output back to a Vector). For N=4 the dense
-# statevector is only 16 entries, so we contract the QMPS against the
-# dense |ψ⟩ vector directly.
+# 5-tensor "label-MPS" architecture matching the paper for N=4:
 #
-# QMPS tensor shapes (CENTRAL_SITE = N÷2 = 2):
-#   T1 :  (s1, L1)              shape (2, χ)
-#   T2 :  (s2, L1, L2, F)       shape (2, χ, χ, d_f)   ← central, feature leg
-#   T3 :  (s3, L2, L3)          shape (2, χ, χ)
-#   T4 :  (s4, L3)              shape (2, χ)
+#   T1 :  (s1, B1)              physical site 1 (boundary)        — (2, 2)
+#   T2 :  (s2, B1, B2)          physical site 2                   — (2, 2, 4)
+#   T3 :  (B2, F, B3)           feature-only center (NO phys leg) — (4, 32, 4)
+#   T4 :  (s3, B3, B4)          physical site 3                   — (2, 4, 2)
+#   T5 :  (s4, B4)              physical site 4 (boundary)        — (2, 2)
 #
-# Overlap:
-#   o[F] = Σ conj(ψ)[s1,s2,s3,s4] · T1[s1,L1] · T2[s2,L1,L2,F] · T3[s3,L2,L3] · T4[s4,L3]
+# Overlap (raw, complex):
+#   o[F] = Σ conj(ψ)[s1,s2,s3,s4] · T1[s1,B1] · T2[s2,B1,B2]
+#                                · T3[B2,F,B3] · T4[s3,B3,B4] · T5[s4,B4]
+#
+# Feature vector returned to the NN head: feat[F] = log(|o[F]|² + ε) / N.
 
 const QMPS_SHAPES = [
-    (2, CHI_Q),                       # T1
-    (2, CHI_Q, CHI_Q, D_F),           # T2 (central)
-    (2, CHI_Q, CHI_Q),                # T3
-    (2, CHI_Q),                       # T4
+    (2, CHI_BONDS[1]),                       # T1
+    (2, CHI_BONDS[1], CHI_BONDS[2]),         # T2
+    (CHI_BONDS[2], D_F, CHI_BONDS[3]),       # T3 center (no physical leg)
+    (2, CHI_BONDS[3], CHI_BONDS[4]),         # T4
+    (2, CHI_BONDS[4]),                       # T5
 ]
-@assert length(QMPS_SHAPES) == N
-@assert CENTRAL_SITE == 2  # hard-coded contraction order below assumes this
+@assert length(QMPS_SHAPES) == N + 1
 
-const QMPS_NUMEL = [prod(s) for s in QMPS_SHAPES]
+const QMPS_NUMEL           = [prod(s) for s in QMPS_SHAPES]
 const QMPS_NPARAMS_COMPLEX = sum(QMPS_NUMEL)
 const QMPS_NPARAMS_REAL    = 2 * QMPS_NPARAMS_COMPLEX
 
-function _init_qmps(seed::Int = 42)
+# ----- initialization (paper: identity-near real part + N(0, 0.5) noise) -----
+
+function _qmps_real_init(shape::Tuple, kind::Symbol)
+    arr = zeros(Float64, shape)
+    if kind == :boundary
+        # shape (s, B): paper places the unit weight at bond index 0 (Julia 1)
+        # for both physical states.
+        arr[:, 1] .= 1.0
+    elseif kind == :bulk
+        # shape (s, B1, B2): identity matrix in the two bond legs, broadcast
+        # over the physical leg.
+        m = Matrix{Float64}(I, shape[2], shape[3])
+        @inbounds for s in 1:shape[1]
+            arr[s, :, :] .= m
+        end
+    elseif kind == :center
+        # shape (B1, F, B2): identity matrix in the two bond legs, broadcast
+        # over the feature leg.
+        m = Matrix{Float64}(I, shape[1], shape[3])
+        @inbounds for f in 1:shape[2]
+            arr[:, f, :] .= m
+        end
+    else
+        error("unknown init kind $kind")
+    end
+    return arr
+end
+
+const _QMPS_KINDS = (:boundary, :bulk, :center, :bulk, :boundary)
+
+function _init_qmps(seed::Int = 42; std::Float64 = 0.5)
     rng = MersenneTwister(seed)
     chunks = Vector{ComplexF64}[]
-    for s in QMPS_SHAPES
-        # small-magnitude init so initial overlap with a random product state
-        # is finite (avoids log(0))
-        c = randn(rng, ComplexF64, prod(s)) ./ sqrt(prod(s))
-        push!(chunks, c)
+    for (shape, kind) in zip(QMPS_SHAPES, _QMPS_KINDS)
+        re = _qmps_real_init(shape, kind) .+ std .* randn(rng, shape)
+        im_ = std .* randn(rng, shape)
+        push!(chunks, vec(complex.(re, im_)))
     end
     return chunks
 end
 
 const QMPS_CHUNKS = Ref(_init_qmps())
 
-# Convert an MPS to a dense statevector of shape (2,2,2,2). Cheap at N=4.
-function _state_to_dense(ψ::MPS)
-    T = ψ[1]
-    for i in 2:N
-        T = T * ψ[i]
-    end
-    # Order the site indices canonically (SITES[1], SITES[2], ...).
-    return Array(T, SITES...)        # shape (2,2,2,2)
+# ----- Zygote-friendly contraction -----
+
+# Compute the (D_F,)-vector of complex overlaps o[F] given conj(ψ_dense) and
+# the five complex tensors. Only reshape / permutedims / matmul — Zygote-safe.
+function _qmps_overlap_dense(ψc::AbstractArray{<:Complex, 4},
+                             T1::AbstractArray{<:Complex, 2},
+                             T2::AbstractArray{<:Complex, 3},
+                             T3::AbstractArray{<:Complex, 3},
+                             T4::AbstractArray{<:Complex, 3},
+                             T5::AbstractArray{<:Complex, 2})
+    B1 = size(T1, 2); B2 = size(T2, 3); B3 = size(T3, 3); B4 = size(T4, 3)
+    F  = size(T3, 2)
+
+    # Step 1: ψc[s1,s2,s3,s4] · T1[s1,B1] → M1[B1, s2*s3*s4]
+    ψc_mat = reshape(ψc, 2, 2 * 2 * 2)                                 # (s1, 8)
+    T1_T   = permutedims(T1, (2, 1))                                   # (B1, s1)
+    M1_mat = T1_T * ψc_mat                                             # (B1, 8)
+    M1     = reshape(M1_mat, B1, 2, 2, 2)                              # (B1, s2, s3, s4)
+
+    # Step 2: contract (s2, B1) with T2[s2,B1,B2] → M2[B2, s3*s4]
+    M1_p   = permutedims(M1, (2, 1, 3, 4))                             # (s2, B1, s3, s4)
+    M1_mat2 = reshape(M1_p, 2 * B1, 2 * 2)                             # (s2*B1, s3*s4)
+    T2_mat = reshape(T2, 2 * B1, B2)                                   # (s2*B1, B2)
+    T2_T   = permutedims(T2_mat, (2, 1))                               # (B2, s2*B1)
+    M2_mat = T2_T * M1_mat2                                            # (B2, 4)
+    M2     = reshape(M2_mat, B2, 2, 2)                                 # (B2, s3, s4)
+
+    # Step 3: contract B2 with T3[B2,F,B3] → M3[F, B3, s3, s4]
+    T3_p   = permutedims(T3, (2, 3, 1))                                # (F, B3, B2)
+    T3_mat = reshape(T3_p, F * B3, B2)                                 # (F*B3, B2)
+    M2_mat3 = reshape(M2, B2, 2 * 2)                                   # (B2, s3*s4)
+    M3_mat = T3_mat * M2_mat3                                          # (F*B3, s3*s4)
+    M3     = reshape(M3_mat, F, B3, 2, 2)                              # (F, B3, s3, s4)
+
+    # Step 4: contract (s3, B3) with T4[s3,B3,B4] → M4[B4, F, s4]
+    T4_p   = permutedims(T4, (3, 1, 2))                                # (B4, s3, B3)
+    T4_mat = reshape(T4_p, B4, 2 * B3)                                 # (B4, s3*B3)
+    M3_p   = permutedims(M3, (3, 2, 1, 4))                             # (s3, B3, F, s4)
+    M3_mat4 = reshape(M3_p, 2 * B3, F * 2)                             # (s3*B3, F*s4)
+    M4_mat = T4_mat * M3_mat4                                          # (B4, F*s4)
+    M4     = reshape(M4_mat, B4, F, 2)                                 # (B4, F, s4)
+
+    # Step 5: contract (s4, B4) with T5[s4,B4] → o[F]
+    T5_p   = permutedims(T5, (2, 1))                                   # (B4, s4)
+    T5_vec = reshape(T5_p, B4 * 2)                                     # (B4*s4,)
+    M4_p   = permutedims(M4, (1, 3, 2))                                # (B4, s4, F)
+    M4_mat5 = reshape(M4_p, B4 * 2, F)                                 # (B4*s4, F)
+    o      = transpose(M4_mat5) * T5_vec                               # (F,) complex
+    return o
 end
 
-# Plain-array overlap contraction (Zygote-friendly).
-function _qmps_overlap_dense(ψc::AbstractArray{ComplexF64,4},
-                             T1::AbstractArray{ComplexF64,2},
-                             T2::AbstractArray{ComplexF64,4},
-                             T3::AbstractArray{ComplexF64,3},
-                             T4::AbstractArray{ComplexF64,2})
-    # ψc is already conj(ψ_dense), shape (s1, s2, s3, s4).
-    #
-    # Step 1: contract s1 with T1 → M1[L1, s2, s3, s4]
-    M1 = reshape(reshape(ψc, 2, 8)' * T1, 8, CHI_Q)      # (s2*s3*s4, L1)
-    M1 = permutedims(reshape(M1, 2, 2, 2, CHI_Q), (4, 1, 2, 3))  # (L1, s2, s3, s4)
-
-    # Step 2: contract (s2, L1) with T2 → M2[s3, s4, L2, F]
-    M1f = reshape(M1, CHI_Q*2, 4)                # (L1*s2, s3*s4)  -- need (s2*L1)
-    # actually order matters: T2 has axes (s2, L1, L2, F). Reshape T2 to (s2*L1, L2*F),
-    # reshape M1 to (L1*s2, s3*s4) and permute properly.
-    M1_s2L1 = permutedims(M1, (2, 1, 3, 4))                 # (s2, L1, s3, s4)
-    M1_mat  = reshape(M1_s2L1, 2*CHI_Q, 4)                  # (s2*L1, s3*s4)
-    T2_mat  = reshape(T2, 2*CHI_Q, CHI_Q*D_F)               # (s2*L1, L2*F)
-    M2_mat  = T2_mat' * M1_mat                              # (L2*F, s3*s4)
-    M2      = reshape(M2_mat, CHI_Q, D_F, 2, 2)             # (L2, F, s3, s4)
-
-    # Step 3: contract (s3, L2) with T3 → M3[L3, F, s4]
-    M2_s3L2 = permutedims(M2, (3, 1, 2, 4))                 # (s3, L2, F, s4)
-    M2_mat3 = reshape(M2_s3L2, 2*CHI_Q, D_F*2)              # (s3*L2, F*s4)
-    T3_mat  = reshape(T3, 2*CHI_Q, CHI_Q)                   # (s3*L2, L3)
-    M3_mat  = T3_mat' * M2_mat3                             # (L3, F*s4)
-    M3      = reshape(M3_mat, CHI_Q, D_F, 2)                # (L3, F, s4)
-
-    # Step 4: contract (s4, L3) with T4 → o[F]
-    M3_s4L3 = permutedims(M3, (3, 1, 2))                    # (s4, L3, F)
-    M3_mat4 = reshape(M3_s4L3, 2*CHI_Q, D_F)                # (s4*L3, F)
-    T4_vec  = reshape(T4, 2*CHI_Q)                          # (s4*L3,)
-    o       = (T4_vec' * M3_mat4)                           # row-vector (1, F)
-    return vec(collect(o))                                  # Vector{ComplexF64} length D_F
-end
-
-# Wrap to take a chunks vector and produce the feature vector.
-# Pure-functional in `chunks` for Zygote.
-function _qmps_feature(ψc::AbstractArray{ComplexF64,4},
+# Feature vector: log(|o|² + ε) / N
+function _qmps_feature(ψc::AbstractArray{<:Complex, 4},
                        chunks::Vector{Vector{ComplexF64}})
     T1 = reshape(chunks[1], QMPS_SHAPES[1])
     T2 = reshape(chunks[2], QMPS_SHAPES[2])
     T3 = reshape(chunks[3], QMPS_SHAPES[3])
     T4 = reshape(chunks[4], QMPS_SHAPES[4])
-    o  = _qmps_overlap_dense(ψc, T1, T2, T3, T4)
+    T5 = reshape(chunks[5], QMPS_SHAPES[5])
+    o  = _qmps_overlap_dense(ψc, T1, T2, T3, T4, T5)
     return [log(abs2(c) + 1e-16) / N for c in o]
 end
 
@@ -307,10 +383,10 @@ end
 function _chunks_to_real_flat(chunks::Vector{Vector{ComplexF64}})
     out = zeros(Float64, QMPS_NPARAMS_REAL)
     k = 1
-    for c in chunks
+    @inbounds for c in chunks
         for z in c
-            out[k]   = real(z)
-            out[k+1] = imag(z)
+            out[k]     = real(z)
+            out[k + 1] = imag(z)
             k += 2
         end
     end
@@ -320,42 +396,41 @@ end
 function _real_flat_to_chunks(flat::AbstractVector)
     # Zygote-friendly: no in-place mutation, no push!.
     # Layout: flat[2k-1], flat[2k] = (real, imag) of complex param k.
-    # Boundaries: chunk i occupies complex params (offsets[i]+1 .. offsets[i+1]).
-    offsets = cumsum([0; QMPS_NUMEL])           # complex-param offsets
+    offsets = cumsum([0; QMPS_NUMEL])
     return [
-        [complex(flat[2*(offsets[i]+j) - 1], flat[2*(offsets[i]+j)])
+        [complex(flat[2 * (offsets[i] + j) - 1], flat[2 * (offsets[i] + j)])
          for j in 1:QMPS_NUMEL[i]]
-        for i in 1:N
+        for i in 1:length(QMPS_NUMEL)
     ]
 end
 
-# ----- Python-facing API -----
+# ===================================================================
+# Python-facing API
+# ===================================================================
 
 n_qmps_params_real() = QMPS_NPARAMS_REAL
-d_f() = D_F
-n_actions() = N_ACTIONS
+d_f()                = D_F
+n_actions()          = N_ACTIONS
 
 get_qmps_params() = _chunks_to_real_flat(QMPS_CHUNKS[])
 
 function set_qmps_params!(flat::AbstractVector)
-    # Accept any AbstractVector (e.g. PyArray from juliacall, Vector{Float64}, ...).
+    # Accept any AbstractVector (e.g. PyArray from juliacall, Vector{Float64}).
     QMPS_CHUNKS[] = _real_flat_to_chunks(collect(Float64, flat))
     return nothing
 end
 
-# Single forward (no grad): returns Vector{Float64} of length d_f.
+# Single forward (no grad): returns Vector{Float64} of length D_F.
 function qmps_feature(state_id::Int)
-    ψ = get_state(state_id)
-    ψc = conj(_state_to_dense(ψ))
+    ψc = conj(get_dense(state_id))
     return _qmps_feature(ψc, QMPS_CHUNKS[])
 end
 
 # Forward + VJP. Returns (feat::Vector{Float64}, grad_fn).
-# grad_fn(g::Vector{Float64}) returns ∇_params(sum(g .* feat)) as a flat real vector
-# of length QMPS_NPARAMS_REAL.
+# grad_fn(g::Vector{Float64}) returns ∇_params(sum(g .* feat)) as a flat real
+# vector of length QMPS_NPARAMS_REAL.
 function qmps_feature_and_vjp(state_id::Int)
-    ψ = get_state(state_id)
-    ψc = conj(_state_to_dense(ψ))
+    ψc   = conj(get_dense(state_id))
     flat = _chunks_to_real_flat(QMPS_CHUNKS[])
     feat_f = real_flat -> _qmps_feature(ψc, _real_flat_to_chunks(real_flat))
     feat, pb = Zygote.pullback(feat_f, flat)
@@ -366,24 +441,23 @@ function qmps_feature_and_vjp(state_id::Int)
     return feat, grad_fn
 end
 
-# Batched forward (no grad). Returns Matrix{Float64} of shape (D_F, batch).
+# Batched forward (no grad): returns Matrix{Float64} of shape (D_F, batch).
 function qmps_feature_batch(state_ids::AbstractVector)
     n = length(state_ids)
     out = Matrix{Float64}(undef, D_F, n)
     chunks = QMPS_CHUNKS[]
-    for (i, id) in enumerate(state_ids)
-        ψc = conj(_state_to_dense(get_state(Int(id))))
+    @inbounds for (i, id) in enumerate(state_ids)
+        ψc = conj(get_dense(Int(id)))
         out[:, i] = _qmps_feature(ψc, chunks)
     end
     return out
 end
 
-# Batched forward + VJP. Returns (feats::Matrix{Float64} of shape (D_F, batch), grad_fn).
-# grad_fn(G::Matrix{Float64}) returns ∇_params(sum(G .* feats)) summed over the batch
-# as a flat real vector of length QMPS_NPARAMS_REAL.
+# Batched forward + VJP. Returns (feats::Matrix{Float64} of shape (D_F, batch),
+# grad_fn). grad_fn(G::Matrix{Float64}) returns ∇_params(sum(G .* feats)) summed
+# over the batch as a flat real vector of length QMPS_NPARAMS_REAL.
 function qmps_feature_and_vjp_batch(state_ids::AbstractVector)
-    # Cache dense conjugated states once (they don't depend on params).
-    ψc_list = [conj(_state_to_dense(get_state(Int(id)))) for id in state_ids]
+    ψc_list = [conj(get_dense(Int(id))) for id in state_ids]
     flat = _chunks_to_real_flat(QMPS_CHUNKS[])
     feat_f = real_flat -> begin
         chunks = _real_flat_to_chunks(real_flat)

@@ -14,54 +14,65 @@ Three independent projects live side-by-side under one git repo. They share rese
   git clone --recurse-submodules <repo>      # or, after a plain clone:
   git submodule update --init
   ```
-- **TN/** — work-in-progress reimplementation of QMPS using **Julia (ITensorMPS) for the MPS contractions** and **PyTorch for the agent head + optimizer**, glued by `juliacall`. This is the active development surface.
+- **TN/** — our Julia+Python reimplementation of QMPS targeting **paper Study A** exactly. Julia (ITensorMPS + Zygote) owns the MPS contractions; PyTorch owns the agent head and optimizer; juliacall glues them. This is the active development surface.
 
 ## TN/ architecture (the main area)
 
-The non-obvious thing about TN/ is the **two-language split** and how gradients cross it.
+The non-obvious thing about TN/ is the **two-language split** and how gradients cross it. One set of files, paper-matched defaults baked in:
 
 ```
-TN/julia/QMPSRL.jl            ← ITensorMPS sim + QMPS feature contraction + Zygote VJP
+TN/julia/QMPSRL.jl            ← TLFI Hamiltonian + DMRG, 12-action set, 5-tensor QMPS, Zygote VJP
 TN/python/bridge.py           ← juliacall wrapper + torch.autograd.Function (QMPSOverlap)
 TN/python/qmps_agent.py       ← nn.Module: QMPS-feature → MLP head → Q-values
-TN/python/train.py            ← DDQN loop with Polyak target
-TN/python/replay.py           ← (Transition, ReplayBuffer)
+TN/python/train.py            ← Double-DQN loop with buffer pre-fill and hard target copy
+TN/python/replay.py           ← (Transition, ReplayBuffer) with ref-counted Julia-handle eviction
+TN/julia/test_qmps.jl         ← Julia-side unit tests (norm preservation, DMRG, Zygote VJP)
 ```
 
 Key patterns to preserve when editing:
 
-1. **State handles, not arrays.** Julia owns the MPS objects in a `Dict{Int, MPS}` registry (`QMPSRL._registry`); Python only sees integer IDs. `JuliaEnv.step(a)` returns `(next_id, r, done, fid)`. Never try to round-trip an MPS through Python.
+1. **State handles, not arrays.** Julia owns the MPS objects in a `Dict{Int, RegEntry}` registry (`QMPSRL._registry`, with cached dense statevectors for cheap contractions). Python only sees integer IDs. `JuliaEnv.step(a)` returns `(next_id, r, done, fid)`. Never try to round-trip an MPS through Python.
 2. **Custom autograd boundary.** `bridge.QMPSOverlap` / `QMPSOverlapBatch` is the **only** place gradients cross the Julia↔Python line. Forward calls `qmps_feature_and_vjp(_batch)`, stores the closure in `ctx.grad_fn_jl`, and backward invokes it. If you add a new differentiable Julia function, mirror this pattern — do not call Zygote from Python directly.
 3. **Param sync direction.** PyTorch owns the canonical `qmps_params` (an `nn.Parameter`); each forward pushes it into Julia via `set_qmps_params` before calling the contraction. The Julia-side params are scratch state, not source of truth.
-4. **Julia 1-indexed actions.** `bridge.JuliaEnv.step` does `int(action) + 1` before calling Julia. Python keeps 0-indexed actions everywhere else.
-5. **Import order.** `bridge_paper.py` must be imported **before** `torch` to avoid juliacall/torch init issues (see comment in `train_paper.py:26`). Replicate this if you add new entry points.
+4. **Action indexing.** Python passes 0-indexed actions (0..N_ACTIONS-1) straight through. The Julia side does `ACTIONS[a + 1]` inside `decode_action`. Even index → δt+, odd → δt− (paper's parity-based step-size selector). Do not shuffle the action list without also re-checking the parity convention.
+5. **Import order.** `bridge.py` imports juliacall, which must come before `torch`. Any new entry point should import `bridge` first.
 
-### `_paper` vs non-`_paper` variants
+### Paper Study A specifics (what these defaults encode)
 
-There are parallel triplets: `QMPSRL.jl` / `QMPSRL_paper.jl`, `bridge.py` / `bridge_paper.py`, `qmps_agent.py` / `qmps_agent_paper.py`, `train.py` / `train_paper.py`. The `_paper` variants match Metz & Bukov 2023 Study A defaults (24-action → 12-action set with asymmetric `δt₊≠δt₋`, `D_F=32`, hard target-net copy every N grad steps, 40k episodes, single-threaded BLAS for cluster packing). When changing one, decide explicitly whether the change applies to both — they share filenames intentionally but diverge in hyperparameters and action sets.
+- **Hamiltonian:** `H = −J·ΣZ_iZ_{i+1} − gx·ΣX_i − gz·ΣZ_i` (paper sign).
+- **Initial state per episode:** ground state of `(J=1, gx∼U[1.0, 1.1], gz=0)` — near-critical TFIM, drawn fresh each `JuliaEnv(seed=...)`.
+- **Target state:** ground state of `(J=0, gx=0, gz=1)` = `|↑↑↑↑⟩` (Z-basis product, +1 eigenvector of ΣZ).
+- **Reward:** `log(F) / N` where `F = |⟨ψ|target⟩|²`. Termination at `F ≥ 0.995^N = 0.9801` for N=4.
+- **Action set (paper order, 12 actions):** `[gx, ngx, gy, ngy, gz, ngz, Jx, nJx, Jy, nJy, Jz, nJz]` with `δt+ = π/12` and `δt− = π/17`.
+- **QMPS topology:** 5 tensors for N=4 — `T1:(2,2)`, `T2:(2,2,4)`, `T3:(4,32,4)` (feature-only, no physical leg), `T4:(2,4,2)`, `T5:(2,2)`. Init: identity-near real part + N(0, 0.5²) noise.
+- **DDQN:** double-DQN target, half-MSE loss, replay buffer pre-filled with 8000 random-action transitions before training, hard target-net copy every 10 gradient steps.
+- **Schedule:** 4000 episodes, ε exp-decay from 1.0 → 0.01 with time constant `N_ep/8 = 500`.
 
 ### Constants come from Julia
 
-`bridge.N`, `bridge.N_ACTIONS`, `bridge.D_F`, `bridge.N_PARAMS_REAL` are read from the Julia module at import time. Change them in `QMPSRL.jl`, not in Python. Editing `N`, `CHI_Q`, or `D_F` invalidates any saved checkpoints because `N_PARAMS_REAL` changes.
+`bridge.N`, `bridge.N_ACTIONS`, `bridge.D_F`, `bridge.N_PARAMS_REAL`, `bridge.F_THRESHOLD`, `bridge.N_STEPS_MAX` are read from the Julia module at import time. Change them in `QMPSRL.jl`, not in Python. Editing `N`, `CHI_BONDS`, or `D_F` invalidates any saved checkpoints (`N_PARAMS_REAL` changes).
 
 ## Running things
 
-The repo is multi-shell (Windows PowerShell + Bash via WSL); commands below use bash-style paths.
+The repo is multi-shell (Windows PowerShell + Bash); commands below use bash-style paths.
 
-**TN training (active):**
+**TN training (paper Study A defaults):**
 ```bash
 cd TN/python
-python train.py --episodes 5000           # exploratory defaults
-python train_paper.py                     # paper Study A defaults (40k ep)
-python train_paper.py --episodes 1000 --out-prefix smoke    # quick smoke test
+python train.py                                       # 4000-episode paper run
+python train.py --episodes 1000 --out-prefix smoke    # quick smoke test
+python train.py --greedy-eval 200 --eval-seed 9999    # add greedy eval after training
 ```
-Outputs (`*_learning_curve.png`, `*_trajectory.png`, `*_loss.png`, optional `*_greedy_eval.png`) land in `TN/`, not in `TN/python/`. Greedy eval after training: `--greedy-eval 100`.
+Outputs (`*_learning_curve.png`, `*_trajectory.png`, `*_loss.png`, `*_arrays.npz`, `*_model.pt`, optional `*_greedy_eval.{png,npz}`) land in `TN/`, not in `TN/python/`.
 
-Julia env must be the project at `TN/julia/`. The bridge sets `PYTHON_JULIACALL_PROJECT` to that path; first run will instantiate. `PYTHON_JULIACALL_EXE` defaults to `/usr/local/bin/julia` — override it via the same env var if your Julia is elsewhere (especially on Windows).
+Julia env is the project at `TN/julia/`. `bridge.py` sets `PYTHON_JULIACALL_PROJECT` to that path; the first run will instantiate. `PYTHON_JULIACALL_EXE` defaults to `/usr/local/bin/julia` — override it via the same env var if your Julia is elsewhere (Windows: set `PYTHON_JULIACALL_EXE` to e.g. `C:\Users\you\AppData\Local\Programs\Julia-1.x.x\bin\julia.exe`).
 
-**Julia-only test:** `julia --project=TN/julia TN/julia/test_qmps.jl`
+**Julia-only test:**
+```bash
+julia --project=TN/julia TN/julia/test_qmps.jl
+```
 
-**Published QMPS code:**
+**Published QMPS code (reference, read-only):**
 ```bash
 cd QMPS/dqn && python main.py             # writes results/ in CWD
 ```
@@ -70,6 +81,6 @@ cd QMPS/dqn && python main.py             # writes results/ in CWD
 
 ## Conventions worth knowing
 
-- No tests, no linter, no CI configured. "Does training step without erroring and the learning curve plot looks sensible" is the verification bar.
+- No CI or linter configured. Verification bar is: `julia --project=TN/julia TN/julia/test_qmps.jl` passes, plus a short `train.py` smoke run produces a learning curve without NaNs.
 - The `Lattice/` scripts are intentionally redundant single-file experiments; do not refactor them into shared modules unless asked.
-- Action-index encoding lives in `decode_action` in the Julia module; if you change the action set, update both `N_ACTIONS` and `decode_action` together, and check that `bridge.JuliaEnv.step`'s +1 offset is still correct.
+- Action-index encoding lives in `QMPSRL.ACTIONS` and `QMPSRL.decode_action`; if you change the action set, update `N_ACTIONS`, the parity convention in `duration_for`, and the bridge's pass-through.

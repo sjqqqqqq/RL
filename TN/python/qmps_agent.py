@@ -1,36 +1,36 @@
-"""QMPS-based DQN agent.
+"""QMPS-based DQN agent (Paper Study A defaults).
 
 Q-function: features = QMPS overlap with current state, then a small MLP head
-maps the d_f-dim feature vector to a Q-value per action.
-
-Mirrors the structure of Lattice/deepQ_target.py's DQN class but with the QMPS
-feature extractor in place of the input linear layer.
+maps the D_F-dim feature vector to a Q-value per action.
 """
 from __future__ import annotations
 
 import random
 from copy import deepcopy
 
+import bridge as B  # imports juliacall — must precede torch
+
 import torch
 import torch.nn as nn
 
-import bridge as B
-
 
 class QMPSDQN(nn.Module):
-    def __init__(self, hidden: int = 32):
+    """Paper Tab. I: 2 hidden layers, 100 neurons each, tanh activations.
+    NN weights/biases initialized N(0, 0.1²) per QMPS/dqn/models_utils.py."""
+
+    def __init__(self, hidden: int = 100):
         super().__init__()
-        # QMPS params live as a flat real Parameter; sync to Julia on each call.
         init = B.get_qmps_params()                  # init from Julia's QMPSRL
         self.qmps_params = nn.Parameter(init.clone())
         self.head = nn.Sequential(
-            nn.Linear(B.D_F, hidden), nn.ReLU(),
+            nn.Linear(B.D_F,  hidden), nn.Tanh(),
+            nn.Linear(hidden, hidden), nn.Tanh(),
             nn.Linear(hidden, B.N_ACTIONS),
         )
         for m in self.head:
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                nn.init.zeros_(m.bias)
+                nn.init.normal_(m.weight, mean=0.0, std=0.1)
+                nn.init.normal_(m.bias,   mean=0.0, std=0.1)
 
     def forward(self, state_id: int) -> torch.Tensor:
         feat = B.feature(int(state_id), self.qmps_params)
@@ -57,8 +57,8 @@ def clone_for_target(model: QMPSDQN) -> QMPSDQN:
     return tgt
 
 
-def polyak_update(target: QMPSDQN, online: QMPSDQN, tau: float) -> None:
-    """target ← τ·target + (1−τ)·online, both qmps_params and head."""
+def hard_copy(target: QMPSDQN, online: QMPSDQN) -> None:
+    """target ← online (paper's `n_target` hard update)."""
     with torch.no_grad():
         for tp, p in zip(target.parameters(), online.parameters()):
-            tp.data.mul_(tau).add_(p.data, alpha=1.0 - tau)
+            tp.data.copy_(p.data)

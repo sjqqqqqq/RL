@@ -1,0 +1,93 @@
+[prefill] buffer=8000 in 26.1s
+ep     0  eps=1.000  last_fid=0.003  best=0.003  mean_last_50=0.003  buf=8000  reg=8160  loss_recent=0.1123
+ep    50  eps=0.906  last_fid=0.012  best=0.437  mean_last_50=0.114  buf=8000  reg=8160  loss_recent=0.9918
+ep   100  eps=0.821  last_fid=0.094  best=0.437  mean_last_50=0.103  buf=8000  reg=8160  loss_recent=1.2395
+ep   150  eps=0.743  last_fid=0.079  best=0.437  mean_last_50=0.120  buf=8000  reg=8160  loss_recent=0.8893
+ep   200  eps=0.674  last_fid=0.438  best=0.456  mean_last_50=0.118  buf=8000  reg=8160  loss_recent=0.8109
+ep   250  eps=0.610  last_fid=0.146  best=0.734  mean_last_50=0.188  buf=8000  reg=8160  loss_recent=0.6070
+ep   300  eps=0.553  last_fid=0.246  best=0.734  mean_last_50=0.245  buf=8000  reg=8160  loss_recent=0.3516
+ep   350  eps=0.502  last_fid=0.166  best=0.734  mean_last_50=0.286  buf=8000  reg=8160  loss_recent=0.2378
+ep   400  eps=0.455  last_fid=0.742  best=0.834  mean_last_50=0.460  buf=8000  reg=8160  loss_recent=0.1032
+ep   450  eps=0.413  last_fid=0.838  best=0.898  mean_last_50=0.526  buf=8000  reg=8160  loss_recent=0.0522
+ep   500  eps=0.374  last_fid=0.838  best=0.898  mean_last_50=0.612  buf=8000  reg=8160  loss_recent=0.0298
+ep   550  eps=0.340  last_fid=0.530  best=0.991  mean_last_50=0.652  buf=8000  reg=8161  loss_recent=0.0170
+ep   600  eps=0.308  last_fid=0.733  best=0.991  mean_last_50=0.712  buf=8000  reg=8161  loss_recent=0.0109
+ep   650  eps=0.280  last_fid=0.585  best=0.991  mean_last_50=0.744  buf=8000  reg=8161  loss_recent=0.0077
+ep   700  eps=0.254  last_fid=0.857  best=0.991  mean_last_50=0.801  buf=8000  reg=8160  loss_recent=0.0085
+ep   750  eps=0.231  last_fid=0.801  best=0.991  mean_last_50=0.792  buf=8000  reg=8160  loss_recent=0.0068
+ep   800  eps=0.210  last_fid=0.759  best=0.991  mean_last_50=0.805  buf=8000  reg=8160  loss_recent=0.0061
+ep   850  eps=0.191  last_fid=0.878  best=0.991  mean_last_50=0.827  buf=8000  reg=8161  loss_recent=0.0064
+ep   900  eps=0.174  last_fid=0.836  best=0.991  mean_last_50=0.825  buf=8000  reg=8161  loss_recent=0.0040
+ep   950  eps=0.158  last_fid=0.903  best=0.991  mean_last_50=0.883  buf=8000  reg=8162  loss_recent=0.0027
+ep  1000  eps=0.144  last_fid=0.709  best=0.991  mean_last_50=0.862  buf=8000  reg=8163  loss_recent=0.0031
+ep  1050  eps=0.131  last_fid=0.924  best=0.991  mean_last_50=0.838  buf=8000  reg=8164  loss_recent=0.0033
+ep  1100  eps=0.120  last_fid=0.846  best=0.991  mean_last_50=0.873  buf=8000  reg=8162  loss_recent=0.0035
+ep  1150  eps=0.109  last_fid=0.958  best=0.991  mean_last_50=0.896  buf=8000  reg=8161  loss_recent=0.0027
+ep  1200  eps=0.100  last_fid=0.927  best=0.991  mean_last_50=0.890  buf=8000  reg=8162  loss_recent=0.0023
+ep  1250  eps=0.091  last_fid=0.750  best=0.991  mean_last_50=0.904  buf=8000  reg=8161  loss_recent=0.0021
+ep  1300  eps=0.084  last_fid=0.774  best=0.991  mean_last_50=0.894  buf=8000  reg=8161  loss_recent=0.0019
+ep  1350  eps=0.077  last_fid=0.945  best=0.991  mean_last_50=0.910  buf=8000  reg=8162  loss_recent=0.0018
+ep  1400  eps=0.070  last_fid=0.951  best=0.991  mean_last_50=0.898  buf=8000  reg=8162  loss_recent=0.0019
+ep  1450  eps=0.064  last_fid=0.928  best=0.991  mean_last_50=0.903  buf=8000  reg=8162  loss_recent=0.0015
+ep  1500  eps=0.059  last_fid=0.930  best=0.991  mean_last_50=0.911  buf=8000  reg=8161  loss_recent=0.0013
+ep  1550  eps=0.055  last_fid=0.907  best=0.991  mean_last_50=0.924  buf=8000  reg=8162  loss_recent=0.0017
+ep  1600  eps=0.050  last_fid=0.946  best=0.991  mean_last_50=0.912  buf=8000  reg=8163  loss_recent=0.0017
+ep  1650  eps=0.047  last_fid=0.954  best=0.991  mean_last_50=0.920  buf=8000  reg=8162  loss_recent=0.0018
+ep  1700  eps=0.043  last_fid=0.929  best=0.991  mean_last_50=0.922  buf=8000  reg=8164  loss_recent=0.0014
+ep  1750  eps=0.040  last_fid=0.936  best=0.991  mean_last_50=0.925  buf=8000  reg=8164  loss_recent=0.0017
+ep  1800  eps=0.037  last_fid=0.921  best=0.991  mean_last_50=0.929  buf=8000  reg=8165  loss_recent=0.0010
+ep  1850  eps=0.034  last_fid=0.949  best=0.991  mean_last_50=0.931  buf=8000  reg=8165  loss_recent=0.0010
+ep  1900  eps=0.032  last_fid=0.888  best=0.991  mean_last_50=0.933  buf=8000  reg=8165  loss_recent=0.0015
+ep  1950  eps=0.030  last_fid=0.983  best=0.991  mean_last_50=0.938  buf=8000  reg=8165  loss_recent=0.0014
+ep  2000  eps=0.028  last_fid=0.941  best=0.991  mean_last_50=0.936  buf=8000  reg=8168  loss_recent=0.0007
+ep  2050  eps=0.026  last_fid=0.992  best=0.992  mean_last_50=0.944  buf=8000  reg=8171  loss_recent=0.0007
+ep  2100  eps=0.025  last_fid=0.943  best=0.993  mean_last_50=0.947  buf=8000  reg=8173  loss_recent=0.0010
+ep  2150  eps=0.023  last_fid=0.958  best=0.993  mean_last_50=0.944  buf=8000  reg=8175  loss_recent=0.0010
+ep  2200  eps=0.022  last_fid=0.976  best=0.993  mean_last_50=0.955  buf=8000  reg=8175  loss_recent=0.0010
+ep  2250  eps=0.021  last_fid=0.974  best=0.993  mean_last_50=0.947  buf=8000  reg=8181  loss_recent=0.0007
+ep  2300  eps=0.020  last_fid=0.926  best=0.993  mean_last_50=0.951  buf=8000  reg=8189  loss_recent=0.0005
+ep  2350  eps=0.019  last_fid=0.973  best=0.993  mean_last_50=0.953  buf=8000  reg=8198  loss_recent=0.0005
+ep  2400  eps=0.018  last_fid=0.980  best=0.993  mean_last_50=0.959  buf=8000  reg=8209  loss_recent=0.0007
+ep  2450  eps=0.017  last_fid=0.984  best=0.993  mean_last_50=0.967  buf=8000  reg=8225  loss_recent=0.0006
+ep  2500  eps=0.017  last_fid=0.987  best=0.993  mean_last_50=0.958  buf=8000  reg=8226  loss_recent=0.0008
+ep  2550  eps=0.016  last_fid=0.981  best=0.993  mean_last_50=0.959  buf=8000  reg=8225  loss_recent=0.0006
+ep  2600  eps=0.015  last_fid=0.928  best=0.993  mean_last_50=0.966  buf=8000  reg=8235  loss_recent=0.0006
+ep  2650  eps=0.015  last_fid=0.870  best=0.993  mean_last_50=0.969  buf=8000  reg=8244  loss_recent=0.0009
+ep  2700  eps=0.014  last_fid=0.981  best=0.993  mean_last_50=0.972  buf=8000  reg=8247  loss_recent=0.0005
+ep  2750  eps=0.014  last_fid=0.984  best=0.993  mean_last_50=0.962  buf=8000  reg=8253  loss_recent=0.0009
+ep  2800  eps=0.014  last_fid=0.986  best=0.993  mean_last_50=0.982  buf=8000  reg=8280  loss_recent=0.0005
+ep  2850  eps=0.013  last_fid=0.985  best=0.993  mean_last_50=0.979  buf=8000  reg=8308  loss_recent=0.0004
+ep  2900  eps=0.013  last_fid=0.987  best=0.993  mean_last_50=0.975  buf=8000  reg=8335  loss_recent=0.0004
+ep  2950  eps=0.013  last_fid=0.981  best=0.993  mean_last_50=0.980  buf=8000  reg=8353  loss_recent=0.0006
+ep  3000  eps=0.012  last_fid=0.985  best=0.993  mean_last_50=0.985  buf=8000  reg=8382  loss_recent=0.0004
+ep  3050  eps=0.012  last_fid=0.986  best=0.993  mean_last_50=0.979  buf=8000  reg=8406  loss_recent=0.0003
+ep  3100  eps=0.012  last_fid=0.986  best=0.993  mean_last_50=0.981  buf=8000  reg=8427  loss_recent=0.0004
+ep  3150  eps=0.012  last_fid=0.981  best=0.993  mean_last_50=0.981  buf=8000  reg=8456  loss_recent=0.0003
+ep  3200  eps=0.012  last_fid=0.915  best=0.993  mean_last_50=0.980  buf=8000  reg=8480  loss_recent=0.0002
+ep  3250  eps=0.011  last_fid=0.986  best=0.993  mean_last_50=0.979  buf=8000  reg=8500  loss_recent=0.0004
+ep  3300  eps=0.011  last_fid=0.987  best=0.993  mean_last_50=0.978  buf=8000  reg=8505  loss_recent=0.0003
+ep  3350  eps=0.011  last_fid=0.985  best=0.993  mean_last_50=0.980  buf=8000  reg=8513  loss_recent=0.0003
+ep  3400  eps=0.011  last_fid=0.981  best=0.993  mean_last_50=0.983  buf=8000  reg=8521  loss_recent=0.0008
+ep  3450  eps=0.011  last_fid=0.987  best=0.993  mean_last_50=0.974  buf=8000  reg=8522  loss_recent=0.0003
+ep  3500  eps=0.011  last_fid=0.986  best=0.993  mean_last_50=0.980  buf=8000  reg=8523  loss_recent=0.0002
+ep  3550  eps=0.011  last_fid=0.987  best=0.993  mean_last_50=0.984  buf=8000  reg=8526  loss_recent=0.0009
+ep  3600  eps=0.011  last_fid=0.987  best=0.993  mean_last_50=0.970  buf=8000  reg=8513  loss_recent=0.0007
+ep  3650  eps=0.011  last_fid=0.984  best=0.993  mean_last_50=0.984  buf=8000  reg=8525  loss_recent=0.0003
+ep  3700  eps=0.011  last_fid=0.985  best=0.993  mean_last_50=0.979  buf=8000  reg=8527  loss_recent=0.0004
+ep  3750  eps=0.011  last_fid=0.987  best=0.993  mean_last_50=0.982  buf=8000  reg=8533  loss_recent=0.0003
+ep  3800  eps=0.010  last_fid=0.987  best=0.993  mean_last_50=0.984  buf=8000  reg=8553  loss_recent=0.0005
+ep  3850  eps=0.010  last_fid=0.985  best=0.993  mean_last_50=0.981  buf=8000  reg=8568  loss_recent=0.0008
+ep  3900  eps=0.010  last_fid=0.986  best=0.993  mean_last_50=0.978  buf=8000  reg=8575  loss_recent=0.0005
+ep  3950  eps=0.010  last_fid=0.985  best=0.993  mean_last_50=0.986  buf=8000  reg=8582  loss_recent=0.0003
+
+Done in 3993.7s. Best fidelity: 0.9926
+Saved model checkpoint to C:\Users\sjq19\Code\RL\TN/study_a_model.pt
+Saved raw arrays to C:\Users\sjq19\Code\RL\TN/study_a_arrays.npz
+Saved study_a_learning_curve.png, study_a_trajectory.png, study_a_loss.png in TN/
+
+[greedy eval] 200 episodes, 6.9s
+  success rate (F >= 0.9801): 200/200 = 1.000
+  fidelity: mean=0.9858  median=0.9860  min=0.9835  max=0.9873
+  steps used: mean=10.0  median=10.0  max=10
+  saved raw arrays to C:\Users\sjq19\Code\RL\TN/study_a_greedy_eval.npz
+  saved histogram to C:\Users\sjq19\Code\RL\TN/study_a_greedy_eval.png
