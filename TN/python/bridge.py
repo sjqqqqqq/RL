@@ -1,10 +1,13 @@
-"""Python ↔ Julia bridge for QMPSRL (Paper Study A reproduction).
+"""Python ↔ Julia bridge for QMPSRL (Paper Study B reproduction).
 
 Boots juliacall against the TN/julia project, loads the QMPSRL module, and
-exposes:
-  - thin wrappers around the env API (JuliaEnv, fidelity_id, registry_size, ...)
-  - QMPSOverlap / QMPSOverlapBatch — torch.autograd.Function bridges that
-    route gradients back through Julia's Zygote VJP.
+exposes thin wrappers around the env API (JuliaEnv, fidelity_id, state_arrays,
+registry_size, ...) plus the QMPS param read.
+
+The differentiable QMPS contraction does NOT live here: it runs in pure torch
+(`qmps_torch.py`) so gradients flow through torch.autograd. Julia owns only the
+environment dynamics and the per-state MPS arrays; nothing crosses the language
+boundary inside the gradient path.
 
 Import-order note: juliacall must be imported before torch to avoid a known
 init-order segfault. Importing this module (which imports juliacall first)
@@ -74,10 +77,28 @@ class JuliaEnv:
     def __init__(self,
                  seed: int = 0,
                  f_threshold: float = F_THRESHOLD,
-                 n_steps_max: int   = N_STEPS_MAX):
+                 n_steps_max: int   = N_STEPS_MAX,
+                 _env=None):
+        if _env is not None:
+            self._env = _env
+            return
         self._env = jl.QMPSRL.new_env(seed,
                                       f_threshold=f_threshold,
                                       n_steps_max=n_steps_max)
+
+    @classmethod
+    def at_gx(cls,
+              gx: float,
+              seed: int = 0,
+              f_threshold: float = F_THRESHOLD,
+              n_steps_max: int   = N_STEPS_MAX) -> "JuliaEnv":
+        """Build an env whose initial state is the TFIM ground state at a
+        specified gx (runs DMRG fresh; bypasses the U[GX_LO, GX_HI] cache).
+        Used for OOD generalization eval."""
+        jenv = jl.QMPSRL.new_env_at_gx(float(gx), int(seed),
+                                       f_threshold=f_threshold,
+                                       n_steps_max=n_steps_max)
+        return cls(_env=jenv)
 
     @property
     def state_id(self) -> int:
@@ -117,90 +138,30 @@ def fidelity_id(state_id: int) -> float:
     return float(jl.QMPSRL.fidelity_id(int(state_id)))
 
 
+def half_chain_entropy_id(state_id: int) -> float:
+    """Half-chain von Neumann entropy at bond N÷2 ↔ N÷2+1. Used for the
+    paper csB inset diagnostic; not in the training reward path."""
+    return float(jl.QMPSRL.half_chain_entropy_id(int(state_id)))
+
+
+def state_arrays(state_id: int) -> list[np.ndarray]:
+    """Per-site canonical (D_l, 2, D_r) complex arrays for a registered state.
+    Used by the torch-side contraction to build its own padded state tensors;
+    the Julia registry stays the source of truth for the MPS itself."""
+    arrs = jl.QMPSRL.get_arrays(int(state_id))
+    return [np.array(a, dtype=np.complex128, copy=True) for a in arrs]
+
+
 # ---------------------------------------------------------------------------
 # QMPS parameter sync
 # ---------------------------------------------------------------------------
 
 
 def get_qmps_params() -> torch.Tensor:
-    """Pull the current Julia-side QMPS params out as a torch float32 tensor."""
+    """Pull the Julia-side QMPS init params out as a torch float32 tensor.
+
+    Used once, to seed the torch `nn.Parameter`. After that PyTorch owns the
+    canonical params; there is no push-back into Julia (the contraction runs in
+    qmps_torch). Julia's QMPS_CHUNKS stay at their init value and are unused."""
     arr = np.asarray(jl.QMPSRL.get_qmps_params(), dtype=np.float64)
     return torch.from_numpy(arr).to(torch.float32)
-
-
-def set_qmps_params(params: torch.Tensor) -> None:
-    """Push a torch tensor into Julia as the current QMPS params."""
-    flat = params.detach().to(torch.float64).cpu().numpy()
-    jl.QMPSRL.set_qmps_params_b(flat)
-
-
-# ---------------------------------------------------------------------------
-# Custom autograd.Function for the QMPS feature
-# ---------------------------------------------------------------------------
-
-
-class QMPSOverlap(torch.autograd.Function):
-    """Compute feature vector and route gradient back through Julia's Zygote VJP.
-
-    Inputs:
-      state_id : non-differentiable int handle into the Julia state registry
-      params   : (N_PARAMS_REAL,) float32 tensor, the flat QMPS params
-                 (must match what's currently set on the Julia side)
-    Output:
-      feat     : (D_F,) float32 tensor
-    """
-
-    @staticmethod
-    def forward(ctx, state_id, params):
-        set_qmps_params(params)
-        feat_jl, grad_fn = jl.QMPSRL.qmps_feature_and_vjp(int(state_id))
-        feat_np = np.asarray(feat_jl, dtype=np.float64)
-        ctx.grad_fn_jl = grad_fn       # keep alive for backward
-        ctx.n_params   = params.numel()
-        return torch.from_numpy(feat_np).to(params.dtype)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # grad_output is dL/dfeat, shape (D_F,)
-        g_np = grad_output.detach().to(torch.float64).cpu().numpy()
-        g_params = ctx.grad_fn_jl(g_np)
-        g_params_np = np.asarray(g_params, dtype=np.float64)
-        return None, torch.from_numpy(g_params_np).to(grad_output.dtype)
-
-
-class QMPSOverlapBatch(torch.autograd.Function):
-    """Batched QMPS feature contraction.
-
-    Inputs:
-      state_ids : tuple/list/np.ndarray of B int handles (non-differentiable)
-      params    : (N_PARAMS_REAL,) float32 tensor
-    Output:
-      feats     : (B, D_F) float32 tensor (transposed from Julia's column-major)
-    """
-
-    @staticmethod
-    def forward(ctx, state_ids, params):
-        set_qmps_params(params)
-        ids_np = np.asarray([int(i) for i in state_ids], dtype=np.int64)
-        feats_jl, grad_fn = jl.QMPSRL.qmps_feature_and_vjp_batch(ids_np)
-        feats_np = np.asarray(feats_jl, dtype=np.float64)   # (D_F, B) col-major
-        ctx.grad_fn_jl = grad_fn
-        ctx.batch = feats_np.shape[1]
-        return torch.from_numpy(feats_np.T.copy()).to(params.dtype)  # (B, D_F)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # grad_output: (B, D_F). Julia expects (D_F, B).
-        g_np = grad_output.detach().to(torch.float64).cpu().numpy().T.copy()
-        g_params = ctx.grad_fn_jl(g_np)
-        g_params_np = np.asarray(g_params, dtype=np.float64)
-        return None, torch.from_numpy(g_params_np).to(grad_output.dtype)
-
-
-def feature(state_id: int, params: torch.Tensor) -> torch.Tensor:
-    return QMPSOverlap.apply(state_id, params)
-
-
-def feature_batch(state_ids, params: torch.Tensor) -> torch.Tensor:
-    """Batched feature; returns (len(state_ids), D_F)."""
-    return QMPSOverlapBatch.apply(state_ids, params)

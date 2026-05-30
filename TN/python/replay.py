@@ -12,6 +12,7 @@ from collections import defaultdict, deque
 from typing import Deque, NamedTuple
 
 import bridge as B
+import qmps_torch as QT
 
 
 class Transition(NamedTuple):
@@ -52,5 +53,6 @@ class ReplayBuffer:
         if c <= 0:
             del self.refcount[sid]
             B.forget_state(sid)
+            QT.forget(sid)
         else:
             self.refcount[sid] = c
